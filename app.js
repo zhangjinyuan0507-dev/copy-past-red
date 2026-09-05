@@ -5,7 +5,7 @@ const leftEl = document.getElementById('canvasWrap');
 
 let bgFiles = [], curIdx = -1, imgPlacements = {};
 let bg = null, placements = [], vehImgs = {}, vehIndex = 0;
-let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null;
+let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null, savedMap = {}, dirtyMap = {};
 let hideLabels = false, saveRoot = null;
 const CLS = ['car1','car2','car3','car4'];
 const state = { size:0.06, bright:0.8, contrast:0.85, blur:1.2, rot:0 };
@@ -14,6 +14,19 @@ function loadImage(src){ return new Promise(res=>{ const i=new Image(); i.onload
 async function initVehicles(){ for (let i=0;i<VEHICLES.length;i++){ const im=await loadImage(VEHICLES[i].src); if(im) vehImgs[i]=im; } }
 function setStatus(t){ document.getElementById('stem').textContent = t; }
 function setSaveStatus(t){ document.getElementById('saveStatus').textContent = t; }
+function markDirty(){ if(curIdx>=0) dirtyMap[curIdx]=true; showSaveStatus(); }
+function pendingCount(){ let p=0; for(let i=0;i<bgFiles.length;i++){ const has=(i===curIdx)?placements:(imgPlacements[i]||[]); if(has.length && (dirtyMap[i]||!savedMap[i])) p++; } return p; }
+function showSaveStatus(extra){
+  const el=document.getElementById('saveStatus'); if(!el) return;
+  const st = savedMap[curIdx] ? '已保存' : '未保存';
+  const savedN = Object.keys(savedMap).filter(k=>savedMap[k]).length;
+  let t='当前图片状态：'+st+'（'+placements.length+' 个框）';
+  if(bgFiles.length) t+=' · 已存 '+savedN+'/'+bgFiles.length+' 张';
+  t+=' · 待保存 '+pendingCount()+' 张';
+  if(extra) t+=' · '+extra;
+  el.textContent=t;
+}
+function saveProgress(t){ document.getElementById('saveStatus').textContent=t; }
 function clampz(v,a,b){ return Math.max(a,Math.min(b,v)); }
 function fmtN(v){ return Number(v).toFixed(2); }
 function shareName(){ return bg ? bg.name.replace(/\.[^.]+$/,'') : 'img'; }
@@ -124,7 +137,7 @@ function redraw(){
     ctx.fillStyle='#9fe3ff'; ctx.fillText(txt, lx+4, ly+2);
   }
   setStatus('第 '+(curIdx+1)+'/'+bgFiles.length+' 张  车辆 '+placements.length+'  选中 '+(selected+1)+'  '+bg.naturalWidth+'x'+bg.naturalHeight);
-  updateInfo(); updateSizeLabel();
+  updateInfo(); updateSizeLabel(); updateStats();
 }
 
 // ===== 信息 =====
@@ -146,7 +159,7 @@ function updateInfo(){
     '<b>宽×高</b>：'+w+'×'+h+' px<br><b>中心</b>：('+Math.round(p.x)+', '+Math.round(p.y)+')<br>'+
     '<b>像素数</b>：'+(w*h).toFixed(1);
 }
-function deleteSelected(){ if(selected>=0){ placements.splice(selected,1); selected=-1; drag=null; resize=null; rotDrag=null; redraw(); } }
+function deleteSelected(){ if(selected>=0){ placements.splice(selected,1); selected=-1; drag=null; resize=null; rotDrag=null; redraw(); markDirty(); } }
 
 // ===== 参数 =====
 function lastParams(){ return {size:state.size,bright:state.bright,contrast:state.contrast,blur:state.blur,rot:state.rot}; }
@@ -161,24 +174,41 @@ function bindSlider(id,vid,key,fmt){
 }
 
 // ===== 交互 =====
-function genPlan(){ const n=2+Math.floor(Math.random()*5); const t=[]; for(let i=0;i<n;i++) t.push(Math.floor(Math.random()*4)); plan={types:t}; updatePlan(); }
+function updateStats(){
+  const el=document.getElementById('statsInfo'); if(!el||!bgFiles) return;
+  const tot=[0,0,0,0];
+  placements.forEach(p=>{ if(p.vi>=0&&p.vi<4) tot[p.vi]++; });
+  for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; const pl=imgPlacements[i]||[]; pl.forEach(p=>{ if(p.vi>=0&&p.vi<4) tot[p.vi]++; }); }
+  const total=tot.reduce((s,v)=>s+v,0);
+  const col=['#3a7bd5','#2f9e6f','#e8910c','#b05ce8'];
+  let html='<div class="stats">';
+  for(let i=0;i<4;i++){
+    const c=tot[i], w=total>0 ? (c/total*100) : 0, pct=w;
+    html+='<div class="srow"><span class="slab">'+CLS[i]+'</span>'+
+      '<span class="barwrap"><span class="bar" style="width:'+w.toFixed(1)+'%;background:'+col[i]+'"></span></span>'+
+      '<span class="sval">'+c+' · '+pct.toFixed(1)+'%</span></div>';
+  }
+  html+='<div class="stotal">总目标 '+total+' 个</div></div>';
+  el.innerHTML=html;
+}
+function globalCounts(){ const tot=[0,0,0,0]; placements.forEach(p=>{ if(p.vi>=0&&p.vi<4) tot[p.vi]++; }); for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; const pl=imgPlacements[i]||[]; pl.forEach(p=>{ if(p.vi>=0&&p.vi<4) tot[p.vi]++; }); } return tot; }
+function recommendType(){ const tot=globalCounts(); const mn=Math.min.apply(null,tot); const cands=[]; for(let i=0;i<4;i++) if(tot[i]===mn) cands.push(i); return cands[Math.floor(Math.random()*cands.length)]; }
+function genPlan(){ plan={count:2+Math.floor(Math.random()*5)}; updatePlan(); }
 function updatePlan(){
   const el=document.getElementById('planInfo'); if(!el||!plan) return;
-  const n=plan.types.length, cur=placements.length;
-  const cnt=[0,0,0,0]; for(let i=cur;i<n;i++) cnt[plan.types[i]]++;
-  const next = cur<n ? plan.types[cur] : -1;
-  const parts=[]; cnt.forEach((c,i)=>{ if(c>0) parts.push(CLS[i]+'×'+c); });
-  let s='本图建议 <b>'+n+'</b> 辆：'+(parts.join('、')||'<b>已完成</b>');
+  const n=plan.count, cur=placements.length;
+  let s='本图建议 <b>'+n+'</b> 辆（按全图占比自动平衡车型，目标每种约25%）';
   s+='<br>已放 <b>'+cur+'</b>/'+n;
-  s+= next>=0 ? ' · 下一个：<b>'+CLS[next]+'</b>' : ' · <b>✓ 计划完成</b>';
+  if(cur<n){ const r=recommendType(); s+=' · 下一个：<b>'+CLS[r]+'</b>（最少占比，补齐平衡）'; }
+  else s+=' · <b>✓ 已完成</b>';
   el.innerHTML=s;
 }
 function placeVehicleAt(ix,iy,rot){
   let vi=vehIndex;
   if(plan && document.getElementById('autoType') && document.getElementById('autoType').checked){
-    vi = (placements.length < plan.types.length) ? plan.types[placements.length] : Math.floor(Math.random()*4);
+    vi = (placements.length < plan.count) ? recommendType() : Math.floor(Math.random()*4);
   }
-  const np=Object.assign({vi:vi,x:ix,y:iy,rot:rot},lastParams()); placements.push(np); selected=placements.length-1; setSlidersFrom(np); redraw(); updatePlan();
+  const np=Object.assign({vi:vi,x:ix,y:iy,rot:rot},lastParams()); placements.push(np); selected=placements.length-1; setSlidersFrom(np); redraw(); updatePlan(); markDirty();
 }
 function onDown(e){
   if(e.button===2){ pan={baseTx:tx,baseTy:ty,mx:e.clientX,my:e.clientY}; return; }
@@ -187,11 +217,11 @@ function onDown(e){
   // 手柄优先：选中车上的角(缩放) / 旋转点
   const h=handles();
   if(h){
-    for (const cxy of h.corners){ if(Math.hypot(ix-cxy[0],iy-cxy[1])<11){ resize={index:selected,startDist:Math.hypot(ix-h.b.p.x,iy-h.b.p.y),startSize:h.b.p.size}; pending=null; return; } }
-    if(Math.hypot(ix-h.rot.x,iy-h.rot.y)<12){ rotDrag={index:selected}; pending=null; return; }
+    for (const cxy of h.corners){ if(Math.hypot(ix-cxy[0],iy-cxy[1])<11){ resize={index:selected,startDist:Math.hypot(ix-h.b.p.x,iy-h.b.p.y),startSize:h.b.p.size}; pending=null; markDirty(); return; } }
+    if(Math.hypot(ix-h.rot.x,iy-h.rot.y)<12){ rotDrag={index:selected}; pending=null; markDirty(); return; }
   }
   const hit=aabbHit(ix,iy);
-  if(hit>=0){ selected=hit; setSlidersFrom(placements[hit]); drag={index:hit,ox:placements[hit].x-ix,oy:placements[hit].y-iy}; pending=null; redraw(); }
+  if(hit>=0){ selected=hit; setSlidersFrom(placements[hit]); drag={index:hit,ox:placements[hit].x-ix,oy:placements[hit].y-iy}; pending=null; markDirty(); redraw(); }
   else pending={ix,iy,clientX:e.clientX,clientY:e.clientY};
 }
 function onMove(e){
@@ -211,7 +241,7 @@ function loadCurrent(){
   bg=bgFiles[curIdx].img; cv.width=bg.naturalWidth; cv.height=bg.naturalHeight;
   placements=imgPlacements[curIdx]||[]; selected=-1; drag=null; pan=null; pending=null; resize=null; rotDrag=null; 
   fitZoom(); redraw(); updateFileInfo(); updateImgSel();
-  setSaveStatus('当前图片状态：未保存（'+placements.length+' 个框）');
+  showSaveStatus();
   genPlan();
 }
 function goto(delta){ const n=clampz(curIdx+delta,0,bgFiles.length-1); if(n===curIdx) return; saveCurrentPlacements(); curIdx=n; loadCurrent(); }
@@ -258,31 +288,37 @@ async function saveCurrent(){
   try{
     const png=await compositeBlob(bg,placements); const {stem,voc}=buildLabels(bg,placements);
     if(!validBlob(png)){ alert('图片导出失败（画布可能被污染，或浏览器不支持），请刷新重试。'); return; }
+    saveProgress('正在保存当前 「'+stem+'」…');
     const root=await ensureRoot();
     if(root){ try{ const imgDir=await root.getDirectoryHandle('images',{create:true}); const xmlDir=await root.getDirectoryHandle('xml',{create:true});
       await writeFile(imgDir,stem+'_composite.png',png); await writeFile(xmlDir,stem+'.xml',new Blob([voc],{type:'text/xml'}));
-      setSaveStatus('已保存当前（'+stem+'），'+placements.length+' 个框 → images/+xml/'); }
-      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为下载。'); download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); setSaveStatus('已下载当前 无框图+xml（文件夹写入失败回退）'); } } }
-    else { download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); setSaveStatus('已下载当前 无框图+xml（需本地服务才能“存文件夹”）'); }
+      savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus('本张已保存 → images/+xml/'); }
+      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为下载。'); download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus('已下载 无框图+xml（文件夹写入失败回退）'); } } }
+    else { download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus('已下载 无框图+xml（需本地服务才能“存文件夹”）'); }
   } catch(err){ alert('保存出错：'+(err&&err.message||err)); }
 }
 async function saveAll(){
   if(!bgFiles.length){ alert('先加载背景图'); return; }
   try{
     saveCurrentPlacements();
-    const items=[]; for(let i=0;i<bgFiles.length;i++){ const pl=imgPlacements[i]||[]; if(pl.length) items.push({bgImg:bgFiles[i].img,pl,stem:bgFiles[i].img.name.replace(/\.[^.]+$/,'')}); }
-    if(!items.length){ alert('还没有任何图放置了车辆'); return; }
+    const items=[]; for(let i=0;i<bgFiles.length;i++){ const pl=imgPlacements[i]||[]; if(pl.length && (dirtyMap[i]||!savedMap[i])) items.push({idx:i,bgImg:bgFiles[i].img,pl,stem:bgFiles[i].img.name.replace(/\.[^.]+$/,'')}); }
+    if(!items.length){ alert('没有需要保存的图（都已保存且未修改）'); return; }
     const root=await ensureRoot();
     if(root){ try{ const imgDir=await root.getDirectoryHandle('images',{create:true}); const xmlDir=await root.getDirectoryHandle('xml',{create:true});
-      for(const it of items){ const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); await writeFile(imgDir,it.stem+'_composite.png',png); await writeFile(xmlDir,it.stem+'.xml',new Blob([voc],{type:'text/xml'})); }
-      setSaveStatus('全部保存完成：'+items.length+' 张 → images/ + xml/'); }
-      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为逐个下载。'); for(const it of items){ const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); } setSaveStatus('已下载全部 '+items.length+' 张（文件夹写入失败回退）'); } } }
-    else { for(const it of items){ const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); } setSaveStatus('已下载全部 '+items.length+' 张（需本地服务才能“存文件夹”）'); }
+      for(let k=0;k<items.length;k++){ const it=items[k];
+        saveProgress('正在保存 '+(k+1)+'/'+items.length+'：「'+it.stem+'」…');
+        const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl);
+        await writeFile(imgDir,it.stem+'_composite.png',png); await writeFile(xmlDir,it.stem+'.xml',new Blob([voc],{type:'text/xml'}));
+        savedMap[it.idx]=true; dirtyMap[it.idx]=false;
+      }
+      showSaveStatus('本次增量保存完成，共 '+items.length+' 张'); }
+      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为逐个下载。'); for(const it of items){ const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[it.idx]=true; dirtyMap[it.idx]=false; } showSaveStatus('已下载新增 '+items.length+' 张（文件夹写入失败回退）'); } } }
+    else { for(let k=0;k<items.length;k++){ const it=items[k]; saveProgress('正在保存 '+(k+1)+'/'+items.length+'：「'+it.stem+'」…'); const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[it.idx]=true; dirtyMap[it.idx]=false; } showSaveStatus('已下载新增 '+items.length+' 张（需本地服务才能“存文件夹”）'); }
   } catch(err){ alert('保存出错：'+(err&&err.message||err)); }
 }
 
 // ===== 初始化 =====
-function loadImageFiles(files){ const reads=Array.from(files).map(f=>new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>{ const img=new Image(); img.onload=()=>{ img.name=f.name; res({name:f.name,img}); }; img.src=rd.result; }; rd.readAsDataURL(f); })); Promise.all(reads).then(list=>{ if(!list.length) return; bgFiles=list.filter(x=>x&&x.img); curIdx=0; imgPlacements={}; placements=[]; loadCurrent(); setStatus('已加载 '+bgFiles.length+' 张背景'); }); }
+function loadImageFiles(files){ const reads=Array.from(files).map(f=>new Promise(res=>{ const rd=new FileReader(); rd.onload=()=>{ const img=new Image(); img.onload=()=>{ img.name=f.name; res({name:f.name,img}); }; img.src=rd.result; }; rd.readAsDataURL(f); })); Promise.all(reads).then(list=>{ if(!list.length) return; bgFiles=list.filter(x=>x&&x.img); curIdx=0; imgPlacements={}; placements=[]; savedMap={}; dirtyMap={}; loadCurrent(); setStatus('已加载 '+bgFiles.length+' 张背景'); }); }
 function handleDrop(e){
   e.preventDefault();
   const items = e.dataTransfer && e.dataTransfer.items ? Array.from(e.dataTransfer.items) : [];
@@ -302,8 +338,8 @@ function init(){
   document.getElementById('folderInput').addEventListener('change',e=>{ if(e.target.files.length) loadImageFiles(e.target.files); });
   document.getElementById('vehSel').addEventListener('change',e=>setVeh(parseInt(e.target.value)));
   document.getElementById('fitBtn').addEventListener('click',fitZoom);
-  document.getElementById('clear').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); setSaveStatus('当前图片状态：未保存（0 个框）'); });
-  document.getElementById('clear2').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); });
+  document.getElementById('clear').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); markDirty(); });
+  document.getElementById('clear2').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); markDirty(); });
   document.getElementById('hideLabels').addEventListener('change',e=>{ hideLabels=e.target.checked; redraw(); });
   document.getElementById('prev').addEventListener('click',()=>goto(-1));
   document.getElementById('next').addEventListener('click',()=>goto(1));
@@ -315,7 +351,7 @@ function init(){
   function flash(btn){ /* 轻提示：仅加一个短暂的按压缩放/反白（不改持久颜色） */ }
   document.getElementById('saveCur').addEventListener('click',()=>saveCurrent());
   document.getElementById('saveAll').addEventListener('click',()=>saveAll());
-  document.getElementById('undo').addEventListener('click',()=>{ if(placements.length) placements.pop(); if(selected>=placements.length) selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); });
+  document.getElementById('undo').addEventListener('click',()=>{ if(placements.length) placements.pop(); if(selected>=placements.length) selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); markDirty(); });
   cv.addEventListener('mousedown',onDown); cv.addEventListener('mousemove',onMove); cv.addEventListener('mouseup',onUp);
   cv.addEventListener('contextmenu',e=>e.preventDefault()); cv.addEventListener('wheel',wheelZoom,{passive:false});
   window.addEventListener('dragover',e=>{ e.preventDefault(); });
