@@ -5,10 +5,10 @@ const leftEl = document.getElementById('canvasWrap');
 
 let bgFiles = [], curIdx = -1, imgPlacements = {};
 let bg = null, placements = [], vehImgs = {}, vehIndex = 0;
-let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null, savedMap = {}, dirtyMap = {};
+let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null, savedMap = {}, dirtyMap = {}, manualType = -1, defSize = 0.06, defRot = 0;
 let hideLabels = false, saveRoot = null;
 const CLS = ['car1','car2','car3','car4'];
-const state = { size:0.06, bright:0.8, contrast:0.85, blur:1.2, rot:0 };
+const state = { size:0.06, bright:0.8, contrast:1, blur:0.2, rot:0 };
 
 function loadImage(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=()=>res(null); i.src=src; }); }
 async function initVehicles(){ for (let i=0;i<VEHICLES.length;i++){ const im=await loadImage(VEHICLES[i].src); if(im) vehImgs[i]=im; } }
@@ -72,11 +72,11 @@ function handles(){
 
 // ===== 渲染（软融合 + 亮度对齐背景 + 边缘羽化）=====
 function sigmaRGB(d,i){ return 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; }
-function alphaBlur(arr, w, h){ // 3x3 box blur 作用于 alpha 通道，软化边缘
+function alphaBlur(arr, w, h){ // 3x3 box blur 作用于 RGBA，软化车身内容与边缘
   const a0=Array.from(arr); const out=arr.slice();
-  for(let y=0;y<h;y++){ for(let x=0;x<w;x++){ let s=0,c=0;
-    for(let dy=-1;dy<=1;dy++){ for(let dx=-1;dx<=1;dx++){ const yy=y+dy, xx=x+dx; if(xx>=0&&xx<w&&yy>=0&&yy<h){ s+=a0[(yy*w+xx)*4+3]; c++; } } }
-    out[(y*w+x)*4+3]=Math.round(s/c); } }
+  for(let y=0;y<h;y++){ for(let x=0;x<w;x++){ let sr=0,sg=0,sb=0,sa=0,c=0;
+    for(let dy=-1;dy<=1;dy++){ for(let dx=-1;dx<=1;dx++){ const yy=y+dy, xx=x+dx; if(xx>=0&&xx<w&&yy>=0&&yy<h){ const idx=(yy*w+xx)*4; sr+=a0[idx]; sg+=a0[idx+1]; sb+=a0[idx+2]; sa+=a0[idx+3]; c++; } } }
+    const o=(y*w+x)*4; out[o]=Math.round(sr/c); out[o+1]=Math.round(sg/c); out[o+2]=Math.round(sb/c); out[o+3]=Math.round(sa/c); } }
   return out;
 }
 function pasteVehicleSoft(g, bctx, W, H, p, v){
@@ -162,14 +162,14 @@ function updateInfo(){
 function deleteSelected(){ if(selected>=0){ placements.splice(selected,1); selected=-1; drag=null; resize=null; rotDrag=null; redraw(); markDirty(); } }
 
 // ===== 参数 =====
-function lastParams(){ return {size:0.06,bright:0.8,contrast:0.85,blur:1.2,rot:0}; }
+function lastParams(){ return {size:defSize,bright:0.8,contrast:1,blur:0.2,rot:defRot}; }
 function setSlider(id,vid,v){ document.getElementById(id).value=v; document.getElementById(vid).textContent=fmtN(v); }
 function setSlidersFrom(p){
   setSlider('r_size','v_size',p.size);setSlider('r_bright','v_bright',p.bright);setSlider('r_contrast','v_contrast',p.contrast);setSlider('r_blur','v_blur',p.blur);setSlider('r_rot','v_rot',p.rot); updateSizeLabel(); }
-function setVeh(i){ vehIndex=i; const s=document.getElementById('vehSel'); if(s) s.value=String(i); }
+function setVeh(i){ vehIndex=i; manualType=i; const s=document.getElementById('vehSel'); if(s) s.value=String(i); updatePlan(); }
 function bindSlider(id,vid,key,fmt){
   const el=document.getElementById(id), lab=document.getElementById(vid);
-  el.addEventListener('input',()=>{ const v=parseFloat(el.value); lab.textContent=fmt(v); if(selected>=0&&placements[selected]) placements[selected][key]=v; redraw(); });
+  el.addEventListener('input',()=>{ const v=parseFloat(el.value); lab.textContent=fmt(v); if(key==='size') defSize=v; if(key==='rot') defRot=v; if(selected>=0&&placements[selected]) placements[selected][key]=v; redraw(); });
   lab.textContent=fmt(parseFloat(el.value));
 }
 
@@ -199,16 +199,17 @@ function updatePlan(){
   const n=plan.count, cur=placements.length;
   let s='本图建议 <b>'+n+'</b> 辆（按全图占比自动平衡车型，目标每种约25%）';
   s+='<br>已放 <b>'+cur+'</b>/'+n;
-  if(cur<n){ const r=recommendType(); s+=' · 下一个：<b>'+CLS[r]+'</b>（最少占比，补齐平衡）'; }
+  if(manualType>=0){ s+=' · <b>已手动选 '+CLS[manualType]+'</b>（下一辆生效，之后回自动）'; }
+  else if(cur<n){ const r=recommendType(); s+=' · 下一个：<b>'+CLS[r]+'</b>（最少占比，补齐平衡）'; }
   else s+=' · <b>✓ 已完成</b>';
   el.innerHTML=s;
 }
 function placeVehicleAt(ix,iy,rot){
-  let vi=vehIndex;
-  if(plan && document.getElementById('autoType') && document.getElementById('autoType').checked){
-    vi = (placements.length < plan.count) ? recommendType() : Math.floor(Math.random()*4);
-  }
-  const np=Object.assign({vi:vi,x:ix,y:iy,rot:rot},lastParams()); placements.push(np); selected=placements.length-1; setSlidersFrom(np); redraw(); updatePlan(); markDirty();
+  let vi;
+  if(manualType>=0){ vi=manualType; manualType=-1; const s=document.getElementById('vehSel'); if(s) s.value='-1'; }
+  else vi=recommendType();
+  const np=Object.assign({vi:vi,x:ix,y:iy,rot:rot},lastParams());
+  placements.push(np); selected=placements.length-1; setSlidersFrom(np); redraw(); updatePlan(); markDirty();
 }
 function onDown(e){
   if(e.button===2){ pan={baseTx:tx,baseTy:ty,mx:e.clientX,my:e.clientY}; return; }
@@ -227,8 +228,8 @@ function onDown(e){
 function onMove(e){
   const [ix,iy]=imgPoint(e);
   if(pan){ tx=pan.baseTx+(e.clientX-pan.mx); ty=pan.baseTy+(e.clientY-pan.my); updateView(); return; }
-  if(resize){ const p=placements[resize.index]; const d=Math.hypot(ix-p.x,iy-p.y); const f=d/Math.max(1,resize.startDist); p.size=clampz(resize.startSize*f,0.005,0.9); redraw(); return; }
-  if(rotDrag){ const p=placements[rotDrag.index]; p.rot=Math.atan2(iy-p.y,ix-p.x)*180/Math.PI-90; redraw(); return; }
+  if(resize){ const p=placements[resize.index]; const d=Math.hypot(ix-p.x,iy-p.y); const f=d/Math.max(1,resize.startDist); p.size=clampz(resize.startSize*f,0.005,0.9); defSize=p.size; redraw(); return; }
+  if(rotDrag){ const p=placements[rotDrag.index]; p.rot=Math.atan2(iy-p.y,ix-p.x)*180/Math.PI-90; defRot=p.rot; redraw(); return; }
   if(drag){ const p=placements[drag.index]; p.x=ix-drag.ox; p.y=iy-drag.oy; redraw(); return; }
   if(pending&&(Math.abs(e.clientX-pending.clientX)+Math.abs(e.clientY-pending.clientY)>6)){ selected=-1; pan={baseTx:tx,baseTy:ty,mx:e.clientX,my:e.clientY}; pending=null; }
 }
@@ -336,7 +337,7 @@ function handleDrop(e){
 }
 function init(){
   document.getElementById('folderInput').addEventListener('change',e=>{ if(e.target.files.length) loadImageFiles(e.target.files); });
-  document.getElementById('vehSel').addEventListener('change',e=>setVeh(parseInt(e.target.value)));
+  document.getElementById('vehSel').addEventListener('change',e=>{ const v=parseInt(e.target.value); if(v>=0) setVeh(v); else { manualType=-1; updatePlan(); } });
   document.getElementById('fitBtn').addEventListener('click',fitZoom);
   document.getElementById('clear').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); markDirty(); });
   document.getElementById('clear2').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); markDirty(); });
