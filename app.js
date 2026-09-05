@@ -162,14 +162,14 @@ function updateInfo(){
 function deleteSelected(){ if(selected>=0){ placements.splice(selected,1); selected=-1; drag=null; resize=null; rotDrag=null; redraw(); markDirty(); } }
 
 // ===== 参数 =====
-function lastParams(){ return {size:state.size,bright:state.bright,contrast:state.contrast,blur:state.blur,rot:state.rot}; }
+function lastParams(){ return {size:0.06,bright:0.8,contrast:0.85,blur:1.2,rot:0}; }
 function setSlider(id,vid,v){ document.getElementById(id).value=v; document.getElementById(vid).textContent=fmtN(v); }
-function setSlidersFrom(p){ state.size=p.size;state.bright=p.bright;state.contrast=p.contrast;state.blur=p.blur;state.rot=p.rot;
+function setSlidersFrom(p){
   setSlider('r_size','v_size',p.size);setSlider('r_bright','v_bright',p.bright);setSlider('r_contrast','v_contrast',p.contrast);setSlider('r_blur','v_blur',p.blur);setSlider('r_rot','v_rot',p.rot); updateSizeLabel(); }
 function setVeh(i){ vehIndex=i; const s=document.getElementById('vehSel'); if(s) s.value=String(i); }
 function bindSlider(id,vid,key,fmt){
   const el=document.getElementById(id), lab=document.getElementById(vid);
-  el.addEventListener('input',()=>{ const v=parseFloat(el.value); lab.textContent=fmt(v); state[key]=v; if(selected>=0&&placements[selected]) placements[selected][key]=v; redraw(); });
+  el.addEventListener('input',()=>{ const v=parseFloat(el.value); lab.textContent=fmt(v); if(selected>=0&&placements[selected]) placements[selected][key]=v; redraw(); });
   lab.textContent=fmt(parseFloat(el.value));
 }
 
@@ -232,7 +232,7 @@ function onMove(e){
   if(drag){ const p=placements[drag.index]; p.x=ix-drag.ox; p.y=iy-drag.oy; redraw(); return; }
   if(pending&&(Math.abs(e.clientX-pending.clientX)+Math.abs(e.clientY-pending.clientY)>6)){ selected=-1; pan={baseTx:tx,baseTy:ty,mx:e.clientX,my:e.clientY}; pending=null; }
 }
-function onUp(){ if(pan){pan=null;return;} if(drag){drag=null;return;} if(resize){resize=null;return;} if(rotDrag){rotDrag=null;return;} if(pending){ placeVehicleAt(pending.ix,pending.iy,state.rot); pending=null; } }
+function onUp(){ if(pan){pan=null;return;} if(drag){drag=null;return;} if(resize){resize=null;return;} if(rotDrag){rotDrag=null;return;} if(pending){ placeVehicleAt(pending.ix,pending.iy,0); pending=null; } }
 
 // ===== 多图 =====
 function saveCurrentPlacements(){ if(curIdx>=0) imgPlacements[curIdx]=placements.slice(); }
