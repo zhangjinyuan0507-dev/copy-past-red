@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABgUlEQVR4nO2bsUrEQBRF7xxSuljZW4rg/wh2W/lJVnaC/yOIpb2VaK8oBEJIdmeSzCaTmwOBbGbey9w3L3nJLJE2vAkpnS8ub35UAB/vL9G6wpqEDwlEWKPwlECwdvHHtJBqUCp9mojtuAa6tCFzcJn9Po3IHJxmv0srMgeZg8xB5iBzkDnIHGRONcb46u5ZS+Ht6XaQXRjyJLgk4UMDUS+SIHNINVjy7A8ZX6UTsb+/7m17fHjVXDC3+Jj2ogOwjxQ3VxCQOcgcZA65TxB7h5+rEnCKkxwTN2cZDPXO9ihsShizLF7y22CdAcHxf4Fsl8DX9+f/1t5fqt/JXoYODahu252dL8ZvE2QOYx3EpmNq2uby2waZg8xB5iBzGOsgtgyllqtcftsgc6opnNSz0FWSxsxQLr/ZlsV3jUFNNcCcfv+wvwSQOcgcZA4yhyGfmZROUysyh+YPhyxoa0Tm0D6w5izo0kZsx9Lp00SqQYkc0hJiHNh+OFlqINaUvRvKzC9zhp8wGQAVKwAAAABJRU5ErkJggg=="><title>红外车辆拼贴工具 · IR Vehicle Cut-Paste</title>
+<link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABbUlEQVR4nO3bvU7DMBiF4eNXGamY2BkREveDxMbUS2JiQ+J+kBAjOxMqO0yRoightvPTOCfP1Db2Vx/HUtxUkXbeQkrjq+u7XxXg6/MtOlfYUvCciQhbDJ4yEWw9/FAWUjuUqi8TsQ23oCsbMofL2e/LiMzhdPa7siJzyBwyh8whc8gcMofMVWM63zy8ai0+Xu6z+oWcneCagudORH2TBJkjtcOaz37O+Cot4PF4O9jm+eld58Aawqe0mxoyh8whc8gcMsfcXxB7eTvXZTDUL/atsKkw5rZ4yb8G6xUQHP8XaE5ANVXB089377HDxeXq6tYYXWFgkDHHl6476QScIgeROti56rYhc8gcMofMIXPIHGMLxG5GUjctc9WdZQUcBgaRO8i56jZVmsgUg1mybg2ZQ+aQOWQOmSPnMZPSNbMiczTfOKyCdkZkjvYHW14FXdmIbVi6vkykdijRf1lCTAHbBydLnYgtrd6dZvYHii+CHl+IjFsAAAAASUVORK5CYII="><title>红外车辆拼贴工具 · IR Vehicle Cut-Paste</title>
 <style>
   :root{
     --bg:#0d1621; --bar:#17242f; --panel:#1a2833; --panel2:#13202b;
@@ -106,6 +106,13 @@
         <button id="next2">下一张</button>
       </div>
       <select id="imgSel" style="width:100%;margin-top:6px;"></select>
+    </div>
+
+    <div class="sec">
+      <h3><span class="ic">📋</span> 标注计划（随机提示）</h3>
+      <div id="planInfo" class="note" style="color:#cfe3f5;">—</div>
+      <label class="chk"><input type="checkbox" id="autoType" checked> 按计划自动切车型</label>
+      <button id="replan" style="width:100%;margin-top:6px;">换一组计划</button>
     </div>
 
     <div class="sec">
