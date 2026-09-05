@@ -5,7 +5,7 @@ const leftEl = document.getElementById('canvasWrap');
 
 let bgFiles = [], curIdx = -1, imgPlacements = {};
 let bg = null, placements = [], vehImgs = {}, vehIndex = 0;
-let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null;
+let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null;
 let hideLabels = false, saveRoot = null;
 const CLS = ['car1','car2','car3','car4'];
 const state = { size:0.06, bright:0.8, contrast:0.85, blur:1.2, rot:0 };
@@ -161,7 +161,25 @@ function bindSlider(id,vid,key,fmt){
 }
 
 // ===== 交互 =====
-function placeVehicleAt(ix,iy,rot){ const np=Object.assign({vi:vehIndex,x:ix,y:iy,rot:rot},lastParams()); placements.push(np); selected=placements.length-1; setSlidersFrom(np); redraw(); }
+function genPlan(){ const n=2+Math.floor(Math.random()*5); const t=[]; for(let i=0;i<n;i++) t.push(Math.floor(Math.random()*4)); plan={types:t}; updatePlan(); }
+function updatePlan(){
+  const el=document.getElementById('planInfo'); if(!el||!plan) return;
+  const n=plan.types.length, cur=placements.length;
+  const cnt=[0,0,0,0]; for(let i=cur;i<n;i++) cnt[plan.types[i]]++;
+  const next = cur<n ? plan.types[cur] : -1;
+  const parts=[]; cnt.forEach((c,i)=>{ if(c>0) parts.push(CLS[i]+'×'+c); });
+  let s='本图建议 <b>'+n+'</b> 辆：'+(parts.join('、')||'<b>已完成</b>');
+  s+='<br>已放 <b>'+cur+'</b>/'+n;
+  s+= next>=0 ? ' · 下一个：<b>'+CLS[next]+'</b>' : ' · <b>✓ 计划完成</b>';
+  el.innerHTML=s;
+}
+function placeVehicleAt(ix,iy,rot){
+  let vi=vehIndex;
+  if(plan && document.getElementById('autoType') && document.getElementById('autoType').checked){
+    vi = (placements.length < plan.types.length) ? plan.types[placements.length] : Math.floor(Math.random()*4);
+  }
+  const np=Object.assign({vi:vi,x:ix,y:iy,rot:rot},lastParams()); placements.push(np); selected=placements.length-1; setSlidersFrom(np); redraw(); updatePlan();
+}
 function onDown(e){
   if(e.button===2){ pan={baseTx:tx,baseTy:ty,mx:e.clientX,my:e.clientY}; return; }
   if(e.button!==0) return;
@@ -194,6 +212,7 @@ function loadCurrent(){
   placements=imgPlacements[curIdx]||[]; selected=-1; drag=null; pan=null; pending=null; resize=null; rotDrag=null; 
   fitZoom(); redraw(); updateFileInfo(); updateImgSel();
   setSaveStatus('当前图片状态：未保存（'+placements.length+' 个框）');
+  genPlan();
 }
 function goto(delta){ const n=clampz(curIdx+delta,0,bgFiles.length-1); if(n===curIdx) return; saveCurrentPlacements(); curIdx=n; loadCurrent(); }
 function jumpTo(i){ const n=clampz(i,0,bgFiles.length-1); if(n===curIdx) return; saveCurrentPlacements(); curIdx=n; loadCurrent(); }
@@ -291,6 +310,7 @@ function init(){
   document.getElementById('prev2').addEventListener('click',()=>goto(-1));
   document.getElementById('next2').addEventListener('click',()=>goto(1));
   document.getElementById('imgSel').addEventListener('change',e=>jumpTo(parseInt(e.target.value)));
+  document.getElementById('replan').addEventListener('click',genPlan);
   document.getElementById('pickDir').addEventListener('click',pickDir);
   function flash(btn){ /* 轻提示：仅加一个短暂的按压缩放/反白（不改持久颜色） */ }
   document.getElementById('saveCur').addEventListener('click',()=>saveCurrent());
