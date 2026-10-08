@@ -528,7 +528,8 @@ function buildModeSelect(){
   sel.innerHTML='';
   Object.keys(MODES).forEach(k=>{
     const o=document.createElement('option');
-    o.value=k; o.textContent=modeLabel(k)+'（'+modeSpriteCount(k)+' 素材）';
+    const n=(MODES[k] && typeof MODES[k].count==='number') ? MODES[k].count : modeSpriteCount(k);
+    o.value=k; o.textContent=modeLabel(k)+'（'+n+' 素材）';
     sel.appendChild(o);
   });
   sel.value=mode;

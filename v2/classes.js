@@ -4,4 +4,4 @@ const CLS=["car1", "car2", "car3", "car4", "radar_vehicle", "military_fuel_tanke
 const CLS_CN={"car1": "装甲车", "car2": "卡车", "car3": "轿车", "car4": "皮卡", "radar_vehicle": "雷达车", "military_fuel_tanker": "军用油罐车", "bridge_layer": "轮式架桥车", "military_motorcycle": "军用越野摩托车"};
 const CLS_SHORT={"car1": "car1", "car2": "car2", "car3": "car3", "car4": "car4", "radar_vehicle": "雷达车", "military_fuel_tanker": "军用油罐车", "bridge_layer": "轮式架桥车", "military_motorcycle": "军用越野摩托车"};
 const CLS_ID={"car1": 0, "car2": 1, "car3": 2, "car4": 3, "radar_vehicle": 4, "military_fuel_tanker": 5, "bridge_layer": 6, "military_motorcycle": 7};
-const MODES={"base": {"label": "基础四类", "classes": ["car1", "car2", "car3", "car4"], "var": "SPRITES_BASE"}, "incr": {"label": "类增量（新四类）", "classes": ["radar_vehicle", "military_fuel_tanker", "bridge_layer", "military_motorcycle"], "var": "SPRITES_INCR"}};
+const MODES={"base": {"label": "基础四类", "classes": ["car1", "car2", "car3", "car4"], "var": "SPRITES_BASE", "count": 66}, "incr": {"label": "类增量（新四类）", "classes": ["radar_vehicle", "military_fuel_tanker", "bridge_layer", "military_motorcycle"], "var": "SPRITES_INCR", "count": 24}};
