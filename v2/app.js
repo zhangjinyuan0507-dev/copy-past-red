@@ -1,9 +1,14 @@
 // 红外车辆拼贴工具 v2 主逻辑（app.js）
 // 与 v1 的差异：
-//  1) 车辆素材换成 66 个透明渲染车（11 车型 × 6 视角），由 vehicles_v2.js 提供（SPRITES / CLS / CLS_CN）；
-//  2) 类别表按官方口径：0 car1 装甲车、1 car2 卡车、2 car3 轿车、3 car4 皮卡（v1 的 car2/car4 中文名是反的）；
+//  1) 车辆素材换成透明渲染车，并按「模式」分成两套互不相干的素材库与类别表：
+//       base 基础四类    ：car1 装甲车 / car2 卡车 / car3 轿车 / car4 皮卡（66 个素材，类别 ID 0~3）
+//       incr 类增量新四类：radar_vehicle 雷达车 / military_fuel_tanker 军用油罐车 /
+//                          bridge_layer 轮式架桥车 / military_motorcycle 军用越野摩托车（24 个素材，类别 ID 4~7）
+//     类别表由 classes.js 提供（官方口径：旧类 0~3 不变，新类只能从 4 起追加）；
+//  2) v1 把 car2/car4 的中文名写反了（显示 car2 皮卡、car4 卡车），v2 按官方类别表修正；
 //  3) 标注框按车辆**实体可见范围**（素材 alpha 外接框）计算，而不是整张素材画布——v1 的框里大半是透明边距；
-//  4) 摆放时按类别自动挑选车型/视角，面板会显示当前与下一个素材。
+//  4) 摆放时按类别自动挑选车型/视角（同类别不连续重复），面板显示当前与下一个素材；
+//  5) 素材按实体居中归一化，同一「大小」滑块在不同车型/视角上含义一致。
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 const leftEl = document.getElementById('canvasWrap');
@@ -12,11 +17,40 @@ let bgFiles = [], curIdx = -1, imgPlacements = {};
 let bg = null, placements = [], vehImgs = {}, manualCls = -1, lastSiByCls = {}, lastPlacedSiByCls = {};
 let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null, savedMap = {}, dirtyMap = {}, defSize = 0.06, defRot = 0;
 let hideLabels = false, saveRoot = null;
+let mode = 'base';                 // 当前模式：base（基础四类）| incr（类增量新四类）
+let SPRITES = [];                  // 两套素材合并后的全集；si 为全局下标，切换模式不会错位
+const GROUPS = { base: [], incr: [] };
 const state = { size:0.06, bright:0.8, contrast:1, blur:0.2, rot:0 };
-// CLS / CLS_CN / SPRITES 由 vehicles_v2.js 定义（类别表为硬约束，勿在别处重排）
+// CLS / CLS_CN / CLS_ID / MODES 由 classes.js 定义（类别表为硬约束，勿在别处重排）
 
 function loadImage(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=()=>res(null); i.src=src; }); }
-async function initVehicles(){ for (let i=0;i<SPRITES.length;i++){ const im=await loadImage(SPRITES[i].src); if(im) vehImgs[i]=im; } }
+
+/* ===== 模式：两套素材库/类别表严格分开 ===== */
+function modeInfo(m){ return MODES[m] || MODES.base; }
+function modeLabel(m){ return modeInfo(m).label || m; }
+function modeClasses(m){ return modeInfo(m).classes || []; }
+function modeClassIds(m){ return modeClasses(m).map(k=>CLS_ID[k]); }
+function otherMode(m){ return m==='base' ? 'incr' : 'base'; }
+function rebuildSprites(){
+  GROUPS.base = (typeof SPRITES_BASE!=='undefined') ? SPRITES_BASE : [];
+  GROUPS.incr = (typeof SPRITES_INCR!=='undefined') ? SPRITES_INCR : [];
+  SPRITES = GROUPS.base.concat(GROUPS.incr);
+}
+function modeSpriteCount(m){ let n=0; for(const s of SPRITES) if(s.mode===m) n++; return n; }
+function loadScriptOnce(src){ return new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src=src; sc.onload=()=>res(true); sc.onerror=()=>rej(new Error('无法加载 '+src)); document.head.appendChild(sc); }); }
+/* 类增量素材按需加载（基础四类由 index.html 直接引入） */
+async function ensureModeAssets(m){
+  if(m==='base' || (GROUPS.incr && GROUPS.incr.length)) return true;
+  saveProgress('正在加载「'+modeLabel(m)+'」素材…');
+  await loadScriptOnce('sprites_incr.js?v=1');
+  rebuildSprites();
+  return true;
+}
+/* 只加载当前模式的素材图片；图片缓存按全局下标，两套可以共存 */
+async function loadModeImages(m){
+  for(let i=0;i<SPRITES.length;i++){ const s=SPRITES[i]; if(s.mode!==m || vehImgs[i]) continue; const im=await loadImage(s.src); if(im) vehImgs[i]=im; }
+}
+async function initVehicles(){ rebuildSprites(); await loadModeImages(mode); }
 function spriteOf(p){ return SPRITES[p.si] || null; }
 function clsOf(p){ const s=spriteOf(p); return s? s.ci : 0; }
 function clsName(p){ return CLS[clsOf(p)]; }
@@ -217,25 +251,89 @@ function bindSlider(id,vid,key,fmt){
 }
 
 // ===== 交互 =====
+/* 统计只算当前模式的 4 个类别（跨本轮所有背景图） */
+function modeCounts(m){
+  const ids=modeClassIds(m), tot={};
+  ids.forEach(id=>{ tot[id]=0; });
+  const add=(pl)=>{ (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && tot[s.ci]!==undefined) tot[s.ci]++; }); };
+  add(placements);
+  for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; add(imgPlacements[i]); }
+  return ids.map(id=>tot[id]);
+}
 function updateStats(){
   const el=document.getElementById('statsInfo'); if(!el||!bgFiles) return;
-  const tot=[0,0,0,0];
-  placements.forEach(p=>{ const ci=clsOf(p); if(ci>=0&&ci<4) tot[ci]++; });
-  for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; const pl=imgPlacements[i]||[]; pl.forEach(p=>{ const ci=clsOf(p); if(ci>=0&&ci<4) tot[ci]++; }); }
+  const ids=modeClassIds(mode), tot=modeCounts(mode);
   const total=tot.reduce((s,v)=>s+v,0);
   const col=['#3a7bd5','#2f9e6f','#e8910c','#b05ce8'];
   let html='<div class="stats">';
-  for(let i=0;i<4;i++){
-    const c=tot[i], w=total>0 ? (c/total*100) : 0, pct=w;
-    html+='<div class="srow" title="'+CLS[i]+' '+CLS_CN[CLS[i]]+'"><span class="slab">'+CLS[i]+'</span>'+
-      '<span class="barwrap"><span class="bar" style="width:'+w.toFixed(1)+'%;background:'+col[i]+'"></span></span>'+
-      '<span class="sval">'+c+' · '+pct.toFixed(1)+'%</span></div>';
-  }
-  html+='<div class="stotal">总目标 '+total+' 个</div></div>';
+  ids.forEach((id,k)=>{
+    const c=tot[k], w=total>0 ? (c/total*100) : 0;
+    html+='<div class="srow" title="'+CLS[id]+' '+CLS_CN[CLS[id]]+'（类别 ID '+id+'）"><span class="slab">'+((typeof CLS_SHORT!=="undefined"&&CLS_SHORT[CLS[id]])||CLS[id])+'</span>'+
+      '<span class="barwrap"><span class="bar" style="width:'+w.toFixed(1)+'%;background:'+col[k]+'"></span></span>'+
+      '<span class="sval">'+c+' · '+w.toFixed(1)+'%</span></div>';
+  });
+  html+='<div class="stotal">'+modeLabel(mode)+'：总目标 '+total+' 个</div></div>';
   el.innerHTML=html;
 }
-function globalCounts(){ const tot=[0,0,0,0]; placements.forEach(p=>{ const ci=clsOf(p); if(ci>=0&&ci<4) tot[ci]++; }); for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; const pl=imgPlacements[i]||[]; pl.forEach(p=>{ const ci=clsOf(p); if(ci>=0&&ci<4) tot[ci]++; }); } return tot; }
-function recommendType(){ const tot=globalCounts(); const mn=Math.min.apply(null,tot); const cands=[]; for(let i=0;i<4;i++) if(tot[i]===mn) cands.push(i); return cands[Math.floor(Math.random()*cands.length)]; }
+function globalCounts(){ return modeCounts(mode); }
+function recommendType(){
+  const ids=modeClassIds(mode), tot=modeCounts(mode);
+  const mn=Math.min.apply(null,tot);
+  const cands=ids.filter((id,k)=>tot[k]===mn);
+  return cands.length ? cands[Math.floor(Math.random()*cands.length)] : (ids[0]!=null?ids[0]:0);
+}
+/* 类别下拉：按当前模式重建（value 用全局类别 ID） */
+function buildVehSelect(){
+  const sel=document.getElementById('vehSel'); if(!sel) return;
+  sel.innerHTML='';
+  const auto=document.createElement('option'); auto.value='-1'; auto.textContent='自动（推荐）'; sel.appendChild(auto);
+  modeClassIds(mode).forEach((id,k)=>{
+    const o=document.createElement('option');
+    o.value=String(id); o.textContent=(k+1)+' · '+CLS[id]+' '+CLS_CN[CLS[id]];
+    sel.appendChild(o);
+  });
+  sel.value='-1';
+}
+/* 混模式检查：本图/本批里有多少辆属于另一模式 */
+function mixCounts(){
+  const om=otherMode(mode);
+  const count=(pl)=>{ let n=0; (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && s.mode===om) n++; }); return n; };
+  let all=count(placements);
+  for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; all+=count(imgPlacements[i]); }
+  return {cur:count(placements), all:all};
+}
+function updateMixInfo(){
+  const el=document.getElementById('mixInfo'), btn=document.getElementById('cleanOther');
+  if(!el) return;
+  const m=mixCounts();
+  if(m.all>0){
+    el.style.display=''; if(btn) btn.style.display='';
+    el.innerHTML='⚠ 当前图有 <b>'+m.cur+'</b> 辆、本批共 <b>'+m.all+'</b> 辆属于「'+modeLabel(otherMode(mode))+'」，导出时会一起写进 XML（类别名不会错，但两套数据就混了）。';
+  } else {
+    el.style.display='none'; if(btn) btn.style.display='none';
+  }
+}
+/* 把本图里不属于当前模式的车一次性删掉 */
+function cleanOtherMode(){
+  const om=otherMode(mode), before=placements.length;
+  placements=placements.filter(p=>{ const s=spriteOf(p); return !(s && s.mode===om); });
+  const removed=before-placements.length;
+  if(removed>0){ if(selected>=placements.length) selected=-1; redraw(); markDirty(); updateMixInfo(); updateStats(); updatePlan(); updateInfo(); }
+  setStatus(removed>0 ? ('已删除本图 '+removed+' 辆「'+modeLabel(om)+'」的车') : '本图没有其他模式的车');
+}
+/* 切换模式：换素材库、类别表、统计与快捷键；已有标注不丢（下标全局稳定），只做混用提醒 */
+async function switchMode(m){
+  if(m===mode || !MODES[m]) return;
+  try{ await ensureModeAssets(m); }
+  catch(e){ setStatus('素材加载失败：'+(e&&e.message||e)); const sel=document.getElementById('modeSel'); if(sel) sel.value=mode; return; }
+  mode=m;
+  const sel=document.getElementById('modeSel'); if(sel) sel.value=m;
+  await loadModeImages(m);
+  manualCls=-1; lastSiByCls={}; lastPlacedSiByCls={};
+  buildVehSelect(); genPlan(); updateStats(); updateInfo(); updateSizeLabel(); updateMixInfo(); showSaveStatus(); redraw();
+  setStatus('已切到「'+modeLabel(m)+'」：素材 '+modeSpriteCount(m)+' 个 · 类别 '+modeClasses(m).join(' / ')+
+            '（键盘 1-4 对应本模式四类；两套数据请分别保存到不同目录）');
+}
 function genPlan(){ plan={count:2+Math.floor(Math.random()*5), nextSi:pickSprite(recommendType())}; updatePlan(); updateInfo(); updateSizeLabel(); }
 function updatePlan(){
   const el=document.getElementById('planInfo'); if(!el||!plan) return;
@@ -298,6 +396,7 @@ function loadCurrent(){
   placements=imgPlacements[curIdx]||[]; selected=-1; drag=null; pan=null; pending=null; resize=null; rotDrag=null; 
   fitZoom(); redraw(); updateFileInfo(); updateImgSel();
   showSaveStatus();
+  updateStats(); updateMixInfo();
   genPlan();
 }
 function goto(delta){ const n=clampz(curIdx+delta,0,bgFiles.length-1); if(n===curIdx) return; saveCurrentPlacements(); curIdx=n; loadCurrent(); }
@@ -339,6 +438,12 @@ async function pickDir(){ if(!window.showDirectoryPicker){ alert('该浏览器�
 async function ensureRoot(){ if(saveRoot) return saveRoot; if(!window.showDirectoryPicker) return null; try{ saveRoot=await window.showDirectoryPicker({mode:'readwrite'}); setDirInfo(); return saveRoot; }catch(err){ return null; } }
 function exportJSON(){ if(!bg) return; const data={image:bg.name,width:bg.naturalWidth,height:bg.naturalHeight,boxes:placements.map(p=>({class:clsName(p),sprite:(SPRITES[p.si]||{}).n||'',cx:Math.round(p.x),cy:Math.round(p.y),rot:p.rot,size:p.size,bright:p.bright,contrast:p.contrast,blur:p.blur}))}; download(shareName()+'.json',new Blob([JSON.stringify(data,null,2)],{type:'application/json'})); }
 function validBlob(b){ return b && b.size>0; }
+/* 保存状态里的模式标记与混用提醒 */
+function saveTag(pl){
+  const om=otherMode(mode); let n=0;
+  (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && s.mode===om) n++; });
+  return modeLabel(mode)+(n>0 ? ' · ⚠ 含 '+n+' 辆「'+modeLabel(om)+'」' : '');
+}
 async function saveCurrent(){
   if(!bg){ alert('先加载背景图'); return; }
   try{
@@ -348,9 +453,9 @@ async function saveCurrent(){
     const root=await ensureRoot();
     if(root){ try{ const imgDir=await root.getDirectoryHandle('images',{create:true}); const xmlDir=await root.getDirectoryHandle('xml',{create:true});
       await writeFile(imgDir,stem+'_composite.png',png); await writeFile(xmlDir,stem+'.xml',new Blob([voc],{type:'text/xml'}));
-      savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus('本张已保存 → images/+xml/'); }
-      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为下载。'); download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus('已下载 无框图+xml（文件夹写入失败回退）'); } } }
-    else { download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus('已下载 无框图+xml（需本地服务才能“存文件夹”）'); }
+      savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus(saveTag(placements)+' · 本张已保存 → images/+xml/'); }
+      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为下载。'); download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus(saveTag(placements)+' · 已下载 无框图+xml（文件夹写入失败回退）'); } } }
+    else { download(stem+'_composite.png',png); download(stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[curIdx]=true; dirtyMap[curIdx]=false; showSaveStatus(saveTag(placements)+' · 已下载 无框图+xml（需本地服务才能“存文件夹”）'); }
   } catch(err){ alert('保存出错：'+(err&&err.message||err)); }
 }
 async function saveAll(){
@@ -367,9 +472,9 @@ async function saveAll(){
         await writeFile(imgDir,it.stem+'_composite.png',png); await writeFile(xmlDir,it.stem+'.xml',new Blob([voc],{type:'text/xml'}));
         savedMap[it.idx]=true; dirtyMap[it.idx]=false;
       }
-      showSaveStatus('本次增量保存完成，共 '+items.length+' 张'); }
-      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为逐个下载。'); for(const it of items){ const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[it.idx]=true; dirtyMap[it.idx]=false; } showSaveStatus('已下载新增 '+items.length+' 张（文件夹写入失败回退）'); } } }
-    else { for(let k=0;k<items.length;k++){ const it=items[k]; saveProgress('正在保存 '+(k+1)+'/'+items.length+'：「'+it.stem+'」…'); const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[it.idx]=true; dirtyMap[it.idx]=false; } showSaveStatus('已下载新增 '+items.length+' 张（需本地服务才能“存文件夹”）'); }
+      showSaveStatus(saveTag(items.map(it=>it.pl).flat())+' · 本次增量保存完成，共 '+items.length+' 张'); }
+      catch(err){ if(err&&err.name!=='AbortError'){ alert('写入文件夹失败：'+(err.message||err)+'。已改为逐个下载。'); for(const it of items){ const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[it.idx]=true; dirtyMap[it.idx]=false; } showSaveStatus(saveTag(items.map(it=>it.pl).flat())+' · 已下载新增 '+items.length+' 张（文件夹写入失败回退）'); } } }
+    else { for(let k=0;k<items.length;k++){ const it=items[k]; saveProgress('正在保存 '+(k+1)+'/'+items.length+'：「'+it.stem+'」…'); const png=await compositeBlob(it.bgImg,it.pl); const {voc}=buildLabels(it.bgImg,it.pl); download(it.stem+'_composite.png',png); download(it.stem+'.xml',new Blob([voc],{type:'text/xml'})); savedMap[it.idx]=true; dirtyMap[it.idx]=false; } showSaveStatus(saveTag(items.map(it=>it.pl).flat())+' · 已下载新增 '+items.length+' 张（需本地服务才能“存文件夹”）'); }
   } catch(err){ alert('保存出错：'+(err&&err.message||err)); }
 }
 
@@ -392,6 +497,8 @@ function handleDrop(e){
 }
 function init(){
   document.getElementById('folderInput').addEventListener('change',e=>{ if(e.target.files.length) loadImageFiles(e.target.files); });
+  document.getElementById('modeSel').addEventListener('change',e=>switchMode(e.target.value));
+  document.getElementById('cleanOther').addEventListener('click',cleanOtherMode);
   document.getElementById('vehSel').addEventListener('change',e=>{ const v=parseInt(e.target.value); if(v>=0) setManualCls(v); else { manualCls=-1; updatePlan(); updateInfo(); updateSizeLabel(); } });
   document.getElementById('fitBtn').addEventListener('click',fitZoom);
   document.getElementById('clear').addEventListener('click',()=>{ placements=[]; selected=-1; drag=null; resize=null; rotDrag=null;  redraw(); markDirty(); });
@@ -413,7 +520,23 @@ function init(){
   window.addEventListener('dragover',e=>{ e.preventDefault(); });
   window.addEventListener('drop',handleDrop);
   bindSlider('r_size','v_size','size',fmtN); bindSlider('r_bright','v_bright','bright',fmtN); bindSlider('r_contrast','v_contrast','contrast',fmtN); bindSlider('r_blur','v_blur','blur',fmtN); bindSlider('r_rot','v_rot','rot',fmtN);
-  document.addEventListener('keydown',e=>{ if(e.key>='1'&&e.key<='4') setManualCls(parseInt(e.key)-1); else if(e.key==='z'){ if(placements.length) placements.pop(); redraw(); } else if(e.key==='c'||e.key==='C'){ placements=[]; redraw(); } else if(e.key==='s'||e.key==='S') saveCurrent(); else if(e.key==='ArrowLeft') goto(-1); else if(e.key==='ArrowRight') goto(1); else if(e.key==='Delete'||e.key==='Backspace'){ if(selected>=0){ e.preventDefault(); deleteSelected(); } } });
+  document.addEventListener('keydown',e=>{ if(e.key>='1'&&e.key<='4'){ const ids=modeClassIds(mode); if(ids[parseInt(e.key)-1]!=null) setManualCls(ids[parseInt(e.key)-1]); } else if(e.key==='z'){ if(placements.length) placements.pop(); redraw(); } else if(e.key==='c'||e.key==='C'){ placements=[]; redraw(); } else if(e.key==='s'||e.key==='S') saveCurrent(); else if(e.key==='ArrowLeft') goto(-1); else if(e.key==='ArrowRight') goto(1); else if(e.key==='Delete'||e.key==='Backspace'){ if(selected>=0){ e.preventDefault(); deleteSelected(); } } });
+}
+/* 模式下拉：按 MODES 生成（两套严格分开，默认基础四类） */
+function buildModeSelect(){
+  const sel=document.getElementById('modeSel'); if(!sel) return;
+  sel.innerHTML='';
+  Object.keys(MODES).forEach(k=>{
+    const o=document.createElement('option');
+    o.value=k; o.textContent=modeLabel(k)+'（'+modeSpriteCount(k)+' 素材）';
+    sel.appendChild(o);
+  });
+  sel.value=mode;
 }
 init();
-initVehicles().then(()=>setStatus('车辆素材已加载（'+SPRITES.length+' 个：11 车型 × 6 视角）。打开一个背景图文件夹：点空白=放车，自动按类别挑选车型/视角（可用 1-4 或下拉框指定类别）。'));
+initVehicles().then(()=>{
+  buildVehSelect(); buildModeSelect();
+  setStatus('素材已加载：'+modeLabel(mode)+' '+modeSpriteCount(mode)+' 个素材 · 类别 '+modeClasses(mode).join(' / ')+
+            '。打开一个背景图文件夹：点空白=放车（自动按类别挑车型/视角，1-4 可指定类别）；顶部「模式」可切到类增量新四类。');
+  updateStats(); updateMixInfo();
+});

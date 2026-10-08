@@ -1,39 +1,114 @@
 {
-  "pack_name": "vehicle_review_pack_20261008_v1",
-  "sample_root": "01_透明样本",
-  "sample_count": 66,
   "canvas": 512,
-  "entity_fraction": 0.92,
+  "modes": {
+    "base": {
+      "file": "sprites_base.js",
+      "sprites": 66,
+      "per_class": {
+        "car1": 18,
+        "car2": 12,
+        "car3": 18,
+        "car4": 18
+      },
+      "models": {
+        "car1": [
+          "6x6_scout_003",
+          "8x8_apc_001",
+          "tracked_ifv_002"
+        ],
+        "car2": [
+          "cabover_6x6_001",
+          "heavy_8x8_003"
+        ],
+        "car3": [
+          "boxy_field_sedan_002",
+          "longwheelbase_command_003",
+          "staff_sedan_001"
+        ],
+        "car4": [
+          "compact_shortbed_003",
+          "doublecab_pickup_001",
+          "singlecab_longbed_002"
+        ]
+      },
+      "png_bytes": 3594229,
+      "js_bytes": 4806354,
+      "entity_max_side": [
+        470,
+        471
+      ]
+    },
+    "incr": {
+      "file": "sprites_incr.js",
+      "sprites": 24,
+      "per_class": {
+        "radar_vehicle": 6,
+        "military_fuel_tanker": 6,
+        "bridge_layer": 6,
+        "military_motorcycle": 6
+      },
+      "models": {
+        "radar_vehicle": [
+          "giraffe4a_mobile_001"
+        ],
+        "military_fuel_tanker": [
+          "m978a4_001"
+        ],
+        "bridge_layer": [
+          "leguan_tatra_10x10_001"
+        ],
+        "military_motorcycle": [
+          "christini_awd450_military_001"
+        ]
+      },
+      "png_bytes": 1149212,
+      "js_bytes": 1538038,
+      "entity_max_side": [
+        470,
+        471
+      ]
+    }
+  },
+  "problems": [],
+  "manifest_rows_checked": {
+    "base": 66,
+    "incr": 24
+  },
   "alpha_threshold": 16,
+  "entity_fraction": 0.92,
   "color_mode": "LA(灰度+alpha)",
-  "per_class": {
-    "car1": 18,
-    "car2": 12,
-    "car3": 18,
-    "car4": 18
-  },
-  "models_per_class": {
-    "car1": [
-      "6x6_scout_003",
-      "8x8_apc_001",
-      "tracked_ifv_002"
-    ],
-    "car2": [
-      "cabover_6x6_001",
-      "heavy_8x8_003"
-    ],
-    "car3": [
-      "boxy_field_sedan_002",
-      "longwheelbase_command_003",
-      "staff_sedan_001"
-    ],
-    "car4": [
-      "compact_shortbed_003",
-      "doublecab_pickup_001",
-      "singlecab_longbed_002"
-    ]
-  },
-  "png_bytes_total": 3594229,
-  "js_base64_bytes_total": 4793848,
-  "problems": []
+  "class_table": {
+    "car1": {
+      "class_id": 0,
+      "cn": "装甲车"
+    },
+    "car2": {
+      "class_id": 1,
+      "cn": "卡车"
+    },
+    "car3": {
+      "class_id": 2,
+      "cn": "轿车"
+    },
+    "car4": {
+      "class_id": 3,
+      "cn": "皮卡"
+    },
+    "radar_vehicle": {
+      "class_id": 4,
+      "cn": "雷达车"
+    },
+    "military_fuel_tanker": {
+      "class_id": 5,
+      "cn": "军用油罐车"
+    },
+    "bridge_layer": {
+      "class_id": 6,
+      "cn": "轮式架桥车"
+    },
+    "military_motorcycle": {
+      "class_id": 7,
+      "cn": "军用越野摩托车"
+    }
+  }
 }
