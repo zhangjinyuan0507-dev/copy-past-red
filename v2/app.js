@@ -9,7 +9,7 @@ const ctx = cv.getContext('2d');
 const leftEl = document.getElementById('canvasWrap');
 
 let bgFiles = [], curIdx = -1, imgPlacements = {};
-let bg = null, placements = [], vehImgs = {}, manualCls = -1, lastSiByCls = {};
+let bg = null, placements = [], vehImgs = {}, manualCls = -1, lastSiByCls = {}, lastPlacedSiByCls = {};
 let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null, savedMap = {}, dirtyMap = {}, defSize = 0.06, defRot = 0;
 let hideLabels = false, saveRoot = null;
 const state = { size:0.06, bright:0.8, contrast:1, blur:0.2, rot:0 };
@@ -22,9 +22,11 @@ function clsOf(p){ const s=spriteOf(p); return s? s.ci : 0; }
 function clsName(p){ return CLS[clsOf(p)]; }
 function clsCn(ci){ return CLS_CN[CLS[ci]] || ''; }
 function spriteLabel(si){ const s=SPRITES[si]; return s? (s.model+' · yaw'+s.yaw+' off'+s.off) : '—'; }
+/* 某个类别的全部素材下标 */
+function spritesOfCls(ci){ const idx=[]; for(let i=0;i<SPRITES.length;i++) if(SPRITES[i].ci===ci) idx.push(i); return idx; }
 /* 从某个类别里随机挑一个素材（尽量避免与上次重复，保证视角/车型多样） */
 function pickSprite(ci){
-  const idx=[]; for(let i=0;i<SPRITES.length;i++) if(SPRITES[i].ci===ci) idx.push(i);
+  const idx=spritesOfCls(ci);
   if(!idx.length) return -1;
   let pick=idx[Math.floor(Math.random()*idx.length)];
   if(idx.length>1 && pick===lastSiByCls[ci]) pick=idx[(idx.indexOf(pick)+1)%idx.length];
@@ -252,7 +254,13 @@ function placeVehicleAt(ix,iy,rot){
   let si=(plan && plan.nextSi!=null && SPRITES[plan.nextSi] && SPRITES[plan.nextSi].ci===ci) ? plan.nextSi : pickSprite(ci);
   if(si<0) si=pickSprite(ci);
   if(si<0) return;
-  lastSiByCls[ci]=si;
+  // 严格避免「同一类别连续两次用同一个素材」：与上一次**实际摆放**比对，而不只是与预览记录比对
+  const pool=spritesOfCls(ci);
+  if(pool.length>1 && lastPlacedSiByCls[ci]===si){
+    const others=pool.filter(x=>x!==si);
+    si=others[Math.floor(Math.random()*others.length)];
+  }
+  lastPlacedSiByCls[ci]=si; lastSiByCls[ci]=si;
   const np=Object.assign({si:si,x:ix,y:iy,rot:rot},lastParams());
   placements.push(np); selected=placements.length-1; setSlidersFrom(np);
   plan.nextSi=pickSprite(recommendType()); // 下一辆的素材（按摆放后的最新占比推荐）
