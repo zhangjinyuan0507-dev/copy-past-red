@@ -17,47 +17,78 @@ let bgFiles = [], curIdx = -1, imgPlacements = {};
 let bg = null, placements = [], vehImgs = {}, manualCls = -1, lastSiByCls = {}, lastPlacedSiByCls = {};
 let selected = -1, drag = null, zoom = 1, baseZoom = 1, pan = null, pending = null, tx = 0, ty = 0, resize = null, rotDrag = null, bgCanvas = null, plan = null, savedMap = {}, dirtyMap = {}, defSize = 0.06, defRot = 0;
 let hideLabels = false, saveRoot = null;
-let mode = 'base';                 // 当前模式：base（基础四类）| incr（类增量新四类）
-let SPRITES = [];                  // 两套素材合并后的全集；si 为全局下标，切换模式不会错位
-const GROUPS = { base: [], incr: [] };
+let mode = 'base';                 // 类别组：base（基础四类）| incr（类增量新四类）
+let spectrum = 'ir';               // 光谱：ir（红外）| vis（可见光）
+let palFilter = 'all';             // 可见光配色筛选：all | desert_camo | olive_green（红外固定 ir）
+let SPRITES = [];                  // 已加载素材的合集；si 为全局下标，切换模式/光谱都不会错位
 const state = { size:0.06, bright:0.8, contrast:1, blur:0.2, rot:0 };
-// CLS / CLS_CN / CLS_ID / MODES 由 classes.js 定义（类别表为硬约束，勿在别处重排）
+// CLS / CLS_CN / CLS_ID / MODES 由 classes.js 定义；SPECTRA / PALETTES / SPRITE_GROUPS 由 sprite_groups.js 定义
 
 function loadImage(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=()=>res(null); i.src=src; }); }
 
-/* ===== 模式：两套素材库/类别表严格分开 ===== */
+/* ===== 类别组（模式）===== */
 function modeInfo(m){ return MODES[m] || MODES.base; }
 function modeLabel(m){ return modeInfo(m).label || m; }
 function modeClasses(m){ return modeInfo(m).classes || []; }
 function modeClassIds(m){ return modeClasses(m).map(k=>CLS_ID[k]); }
+function classMode(ci){ return ci<=3 ? 'base' : 'incr'; }
 function otherMode(m){ return m==='base' ? 'incr' : 'base'; }
+function spectrumLabel(sp){ const s=SPECTRA[sp||spectrum]; return (s&&s.label)||(sp||spectrum); }
+/* 某光谱/配色下某个类别组的素材数（用分组清单的 byClass 统计，不依赖是否已加载） */
+function modeSpriteCount(sp, m, pal){
+  const want=modeClasses(m); let n=0;
+  groupsNeeded(sp, pal||palFilter).forEach(k=>{ const g=SPRITE_GROUPS[k];
+    want.forEach(cl=>{ n += (g.byClass && g.byClass[cl]) || 0; }); });
+  return n;
+}
+/* 已加载进内存的素材数（按光谱/配色过滤） */
+function poolSize(){ let n=0; for(const s of SPRITES) if(spriteMatches(s)) n++; return n; }
+
+/* ===== 素材分组：按光谱/配色分文件，按需懒加载 ===== */
+function groupKeys(){ return Object.keys(SPRITE_GROUPS || {}); }
+/* 取某个分组已加载的素材数组（生成文件用 var 声明，可通过 window[变量名] 动态取用） */
+function groupArray(k){ const g=SPRITE_GROUPS[k]; if(!g) return null; const a=window[g.var]; return Array.isArray(a)? a : null; }
 function rebuildSprites(){
-  GROUPS.base = (typeof SPRITES_BASE!=='undefined') ? SPRITES_BASE : [];
-  GROUPS.incr = (typeof SPRITES_INCR!=='undefined') ? SPRITES_INCR : [];
-  SPRITES = GROUPS.base.concat(GROUPS.incr);
+  const list=[];
+  groupKeys().forEach(k=>{ const a=groupArray(k); if(a) list.push.apply(list,a); });
+  SPRITES=list;
 }
-function modeSpriteCount(m){ let n=0; for(const s of SPRITES) if(s.mode===m) n++; return n; }
+/* 当前「光谱 + 配色」需要哪些分组 */
+function groupsNeeded(sp, pal){
+  return groupKeys().filter(k=>{
+    const g=SPRITE_GROUPS[k];
+    if(!g.count || g.spectrum!==sp) return false;
+    if(sp==='vis' && pal && pal!=='all' && g.palette!==pal) return false;
+    return true;
+  });
+}
 function loadScriptOnce(src){ return new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src=src; sc.onload=()=>res(true); sc.onerror=()=>rej(new Error('无法加载 '+src)); document.head.appendChild(sc); }); }
-/* 类增量素材按需加载（基础四类由 index.html 直接引入） */
-async function ensureModeAssets(m){
-  if(m==='base' || (GROUPS.incr && GROUPS.incr.length)) return true;
-  saveProgress('正在加载「'+modeLabel(m)+'」素材…');
-  await loadScriptOnce('sprites_incr.js?v=1');
-  rebuildSprites();
-  return true;
+async function ensureGroups(sp, pal){
+  const need=groupsNeeded(sp, pal).filter(k=>!groupArray(k));
+  for(const k of need){
+    setSaveStatus('正在加载「'+SPRITE_GROUPS[k].label+'」素材…');
+    await loadScriptOnce(SPRITE_GROUPS[k].file+'?v=2');
+  }
+  if(need.length) rebuildSprites();
+  return need.length;
 }
-/* 只加载当前模式的素材图片；图片缓存按全局下标，两套可以共存 */
-async function loadModeImages(m){
-  for(let i=0;i<SPRITES.length;i++){ const s=SPRITES[i]; if(s.mode!==m || vehImgs[i]) continue; const im=await loadImage(s.src); if(im) vehImgs[i]=im; }
+/* 只加载当前「光谱+配色」范围内的素材图片（图片缓存按全局下标，多套可共存） */
+async function loadPoolImages(){
+  let n=0;
+  for(let i=0;i<SPRITES.length;i++){ const s=SPRITES[i]; if(!spriteMatches(s) || vehImgs[i]) continue; const im=await loadImage(s.src); if(im) vehImgs[i]=im; n++; }
+  return n;
 }
-async function initVehicles(){ rebuildSprites(); await loadModeImages(mode); }
+async function initVehicles(){ rebuildSprites(); await loadPoolImages(); }
+function spriteMatches(sp){ return sp.sp===spectrum && (spectrum!=='vis' || palFilter==='all' || sp.pal===palFilter); }
 function spriteOf(p){ return SPRITES[p.si] || null; }
 function clsOf(p){ const s=spriteOf(p); return s? s.ci : 0; }
 function clsName(p){ return CLS[clsOf(p)]; }
 function clsCn(ci){ return CLS_CN[CLS[ci]] || ''; }
-function spriteLabel(si){ const s=SPRITES[si]; return s? (s.model+' · yaw'+s.yaw+' off'+s.off) : '—'; }
-/* 某个类别的全部素材下标 */
-function spritesOfCls(ci){ const idx=[]; for(let i=0;i<SPRITES.length;i++) if(SPRITES[i].ci===ci) idx.push(i); return idx; }
+function isVis(sp){ return sp && sp.sp==='vis'; }
+function spriteSpectrumLabel(sp){ return isVis(sp) ? ('可见光·'+(PALETTES[sp.pal]||sp.pal)) : '红外'; }
+function spriteLabel(si){ const s=SPRITES[si]; return s? (s.model+' · '+spriteSpectrumLabel(s)+' · yaw'+s.yaw+' off'+s.off) : '—'; }
+/* 当前「光谱+配色」+ 该类别下的全部素材下标 */
+function spritesOfCls(ci){ const idx=[]; for(let i=0;i<SPRITES.length;i++){ const s=SPRITES[i]; if(s.ci===ci && spriteMatches(s)) idx.push(i); } return idx; }
 /* 从某个类别里随机挑一个素材（尽量避免与上次重复，保证视角/车型多样） */
 function pickSprite(ci){
   const idx=spritesOfCls(ci);
@@ -132,7 +163,9 @@ function handles(){
 }
 
 
-// ===== 渲染（软融合 + 亮度对齐背景 + 边缘羽化）=====
+// ===== 渲染（软融合 + 亮度对齐背景 + 保留素材色彩 + 边缘羽化）=====
+// 只重映射「亮度」，并保留每个像素相对亮度的色彩偏移：灰度素材偏移恒为 0，结果与旧版逐像素一致；
+// 彩色素材（可见光）保持自身配色，只让明暗/对比贴合局部背景。
 function sigmaRGB(d,i){ return 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; }
 function alphaBlur(arr, w, h){ // 3x3 box blur 作用于 RGBA，软化车身内容与边缘
   const a0=Array.from(arr); const out=arr.slice();
@@ -146,11 +179,11 @@ function pasteVehicleSoft(g, bctx, W, H, p, v){
   const ov=document.createElement('canvas'); ov.width=w; ov.height=h;
   const octx=ov.getContext('2d'); octx.drawImage(v,0,0,w,h);
   const im=octx.getImageData(0,0,w,h), d=im.data;
-  // 车辆像素统计（alpha>20）
+  // 车辆像素亮度统计（alpha>20）
   let vS=0,vS2=0,vn=0;
   for(let i=0;i<d.length;i+=4){ if(d[i+3]>20){ const l=sigmaRGB(d,i); vS+=l; vS2+=l*l; vn++; } }
   const vMean=vn? vS/vn : 128, vStd=vn? Math.sqrt(Math.max(0,vS2/vn-vMean*vMean)) : 1;
-  // 背景局部统计（中心附近）
+  // 背景局部亮度统计（中心附近）
   const R=Math.max(w,h)+14;
   const bx=Math.max(0,Math.min(W, Math.round(p.x)-R)), by=Math.max(0,Math.min(H, Math.round(p.y)-R));
   const bw=Math.min(W, Math.round(p.x)+R)-bx, bh=Math.min(H, Math.round(p.y)+R)-by;
@@ -161,7 +194,11 @@ function pasteVehicleSoft(g, bctx, W, H, p, v){
   // 对齐：保留车辆自身对比(缩放为背景std*p.contrast)，亮度中心比背景低 (1-p.bright)*std（越大越暗调）
   const tgtStd=Math.max(0.05, p.contrast*bStd), center=bMean-(1-p.bright)*bStd;
   const ratio=(vStd>1e-3)? tgtStd/vStd : 1;
-  for(let i=0;i<d.length;i+=4){ const l=sigmaRGB(d,i); let nv=(l-vMean)*ratio+center; nv=Math.max(0,Math.min(255,nv)); d[i]=d[i+1]=d[i+2]=nv; }
+  for(let i=0;i<d.length;i+=4){
+    const l=sigmaRGB(d,i);
+    let y=(l-vMean)*ratio+center; y=y<0?0:(y>255?255:y);
+    for(let c=0;c<3;c++){ const nv=y+(d[i+c]-l); d[i+c]=nv<0?0:(nv>255?255:nv); } // 保留色彩偏移
+  }
   // 羽化边缘（按 p.blur 次数做 box 模糊）
   let a=d; const passes=Math.max(0,Math.min(6,Math.round(p.blur)));
   for(let k=0;k<passes;k++){ a=alphaBlur(a,w,h); }
@@ -207,9 +244,11 @@ function redraw(){
 // ===== 信息 =====
 /* 下一个将被摆放的素材（只读，不改变随机状态） */
 function plannedSi(){
-  if(plan && plan.nextSi!=null && SPRITES[plan.nextSi]) return plan.nextSi;
+  if(plan && plan.nextSi!=null && SPRITES[plan.nextSi] && spriteMatches(SPRITES[plan.nextSi])) return plan.nextSi;
   const ci=manualCls>=0?manualCls:recommendType();
-  for(let i=0;i<SPRITES.length;i++) if(SPRITES[i].ci===ci) return i;
+  const pool=spritesOfCls(ci);
+  if(pool.length) return pool[0];
+  for(let i=0;i<SPRITES.length;i++) if(spriteMatches(SPRITES[i])) return i;
   return 0;
 }
 function updateSizeLabel(){
@@ -251,11 +290,11 @@ function bindSlider(id,vid,key,fmt){
 }
 
 // ===== 交互 =====
-/* 统计只算当前模式的 4 个类别（跨本轮所有背景图） */
+/* 统计只算当前「光谱 + 类别组」的 4 个类别（跨本轮所有背景图） */
 function modeCounts(m){
   const ids=modeClassIds(m), tot={};
   ids.forEach(id=>{ tot[id]=0; });
-  const add=(pl)=>{ (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && tot[s.ci]!==undefined) tot[s.ci]++; }); };
+  const add=(pl)=>{ (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && s.sp===spectrum && tot[s.ci]!==undefined) tot[s.ci]++; }); };
   add(placements);
   for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; add(imgPlacements[i]); }
   return ids.map(id=>tot[id]);
@@ -272,7 +311,7 @@ function updateStats(){
       '<span class="barwrap"><span class="bar" style="width:'+w.toFixed(1)+'%;background:'+col[k]+'"></span></span>'+
       '<span class="sval">'+c+' · '+w.toFixed(1)+'%</span></div>';
   });
-  html+='<div class="stotal">'+modeLabel(mode)+'：总目标 '+total+' 个</div></div>';
+  html+='<div class="stotal">'+spectrumLabel()+' · '+modeLabel(mode)+'：总目标 '+total+' 个</div></div>';
   el.innerHTML=html;
 }
 function globalCounts(){ return modeCounts(mode); }
@@ -282,6 +321,29 @@ function recommendType(){
   const cands=ids.filter((id,k)=>tot[k]===mn);
   return cands.length ? cands[Math.floor(Math.random()*cands.length)] : (ids[0]!=null?ids[0]:0);
 }
+/* 光谱下拉（红外 / 可见光） */
+function buildSpectrumSelect(){
+  const sel=document.getElementById('spectrumSel'); if(!sel) return;
+  sel.innerHTML='';
+  Object.keys(SPECTRA).forEach(k=>{
+    const o=document.createElement('option');
+    o.value=k; o.textContent=SPECTRA[k].label; sel.appendChild(o);
+  });
+  sel.value=spectrum;
+}
+/* 配色下拉（仅可见光可选；默认全部） */
+function buildPaletteSelect(){
+  const sel=document.getElementById('paletteSel'); if(!sel) return;
+  sel.innerHTML='';
+  const all=document.createElement('option'); all.value='all'; all.textContent='全部配色'; sel.appendChild(all);
+  Object.keys(PALETTES).forEach(k=>{
+    if(k==='ir') return;
+    const o=document.createElement('option'); o.value=k; o.textContent=PALETTES[k]; sel.appendChild(o);
+  });
+  sel.value=(palFilter==='all'?'all':palFilter);
+  sel.disabled=(spectrum!=='vis');
+  sel.title=(spectrum==='vis')?'可见光配色筛选（默认两套都能被抽到）':'配色筛选只在可见光模式下有效';
+}
 /* 类别下拉：按当前模式重建（value 用全局类别 ID） */
 function buildVehSelect(){
   const sel=document.getElementById('vehSel'); if(!sel) return;
@@ -289,15 +351,19 @@ function buildVehSelect(){
   const auto=document.createElement('option'); auto.value='-1'; auto.textContent='自动（推荐）'; sel.appendChild(auto);
   modeClassIds(mode).forEach((id,k)=>{
     const o=document.createElement('option');
-    o.value=String(id); o.textContent=(k+1)+' · '+CLS[id]+' '+CLS_CN[CLS[id]];
+    const n=spritesOfCls(id).length;
+    o.value=String(id); o.textContent=(k+1)+' · '+CLS[id]+' '+CLS_CN[CLS[id]]+(n?'':'（本光谱/配色无素材）');
     sel.appendChild(o);
   });
   sel.value='-1';
 }
-/* 混模式检查：本图/本批里有多少辆属于另一模式 */
+/* 混用检查：本图/本批里有多少辆不属于当前「光谱 + 类别组」 */
+function isForeign(p){
+  const s=spriteOf(p); if(!s) return false;
+  return s.sp!==spectrum || modeClassIds(mode).indexOf(s.ci)<0;
+}
 function mixCounts(){
-  const om=otherMode(mode);
-  const count=(pl)=>{ let n=0; (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && s.mode===om) n++; }); return n; };
+  const count=(pl)=>{ let n=0; (pl||[]).forEach(p=>{ if(isForeign(p)) n++; }); return n; };
   let all=count(placements);
   for(let i=0;i<bgFiles.length;i++){ if(i===curIdx) continue; all+=count(imgPlacements[i]); }
   return {cur:count(placements), all:all};
@@ -308,31 +374,44 @@ function updateMixInfo(){
   const m=mixCounts();
   if(m.all>0){
     el.style.display=''; if(btn) btn.style.display='';
-    el.innerHTML='⚠ 当前图有 <b>'+m.cur+'</b> 辆、本批共 <b>'+m.all+'</b> 辆属于「'+modeLabel(otherMode(mode))+'」，导出时会一起写进 XML（类别名不会错，但两套数据就混了）。';
+    el.innerHTML='⚠ 当前图有 <b>'+m.cur+'</b> 辆、本批共 <b>'+m.all+'</b> 辆不属于当前「'+spectrumLabel()+' · '+modeLabel(mode)+'」，'+
+      '导出时会一起写进 XML（类别名不会错，但两套数据就混了）。';
   } else {
     el.style.display='none'; if(btn) btn.style.display='none';
   }
 }
-/* 把本图里不属于当前模式的车一次性删掉 */
+/* 把本图里不属于当前光谱/模式的车一次性删掉 */
 function cleanOtherMode(){
-  const om=otherMode(mode), before=placements.length;
-  placements=placements.filter(p=>{ const s=spriteOf(p); return !(s && s.mode===om); });
+  const before=placements.length;
+  placements=placements.filter(p=>!isForeign(p));
   const removed=before-placements.length;
   if(removed>0){ if(selected>=placements.length) selected=-1; redraw(); markDirty(); updateMixInfo(); updateStats(); updatePlan(); updateInfo(); }
-  setStatus(removed>0 ? ('已删除本图 '+removed+' 辆「'+modeLabel(om)+'」的车') : '本图没有其他模式的车');
+  setStatus(removed>0 ? ('已删除本图 '+removed+' 辆不属于当前光谱/模式的车') : '本图没有其他光谱/模式的车');
 }
-/* 切换模式：换素材库、类别表、统计与快捷键；已有标注不丢（下标全局稳定），只做混用提醒 */
-async function switchMode(m){
+/* 切换类别组（基础四类 / 类增量新四类）：只换类别表与可选材料，不重新加载素材 */
+function switchMode(m){
   if(m===mode || !MODES[m]) return;
-  try{ await ensureModeAssets(m); }
-  catch(e){ setStatus('素材加载失败：'+(e&&e.message||e)); const sel=document.getElementById('modeSel'); if(sel) sel.value=mode; return; }
   mode=m;
   const sel=document.getElementById('modeSel'); if(sel) sel.value=m;
-  await loadModeImages(m);
   manualCls=-1; lastSiByCls={}; lastPlacedSiByCls={};
-  buildVehSelect(); genPlan(); updateStats(); updateInfo(); updateSizeLabel(); updateMixInfo(); showSaveStatus(); redraw();
-  setStatus('已切到「'+modeLabel(m)+'」：素材 '+modeSpriteCount(m)+' 个 · 类别 '+modeClasses(m).join(' / ')+
-            '（键盘 1-4 对应本模式四类；两套数据请分别保存到不同目录）');
+  buildVehSelect(); buildModeSelect(); genPlan(); updateStats(); updateInfo(); updateSizeLabel(); updateMixInfo(); showSaveStatus(); redraw();
+  setStatus('已切到「'+modeLabel(m)+'」：'+spectrumLabel()+' 素材 '+modeSpriteCount(spectrum,m,palFilter)+' 个 · 类别 '+modeClasses(m).join(' / ')+
+            '（键盘 1-4 对应本组四类；两套数据请分别保存到不同目录）');
+}
+/* 切换光谱（红外 / 可见光）与配色筛选：按需加载素材文件，已有标注不丢 */
+async function switchSpectrum(sp, pal){
+  const nextPal = (sp==='vis') ? (pal || (palFilter==='all'?'all':palFilter)) : 'ir';
+  if(sp===spectrum && (sp!=='vis' || nextPal===palFilter)) return;
+  try{ await ensureGroups(sp, nextPal); }
+  catch(e){ setStatus('素材加载失败：'+(e&&e.message||e)); return; }
+  spectrum=sp; palFilter=nextPal;
+  setSaveStatus('正在加载「'+spectrumLabel()+'」素材图片…');
+  await loadPoolImages();
+  manualCls=-1; lastSiByCls={}; lastPlacedSiByCls={};
+  buildSpectrumSelect(); buildPaletteSelect(); buildVehSelect(); buildModeSelect();
+  genPlan(); updateStats(); updateInfo(); updateSizeLabel(); updateMixInfo(); showSaveStatus(); redraw();
+  setStatus('已切到「'+spectrumLabel()+(spectrum==='vis'?(' · '+(palFilter==='all'?'全部配色':(PALETTES[palFilter]||palFilter))):'')+
+            '」：本组可用素材 '+modeSpriteCount(spectrum, mode, palFilter)+' 个。另一光谱/模式的车不会被删除，但会提示混用。');
 }
 function genPlan(){ plan={count:2+Math.floor(Math.random()*5), nextSi:pickSprite(recommendType())}; updatePlan(); updateInfo(); updateSizeLabel(); }
 function updatePlan(){
@@ -349,7 +428,7 @@ function placeVehicleAt(ix,iy,rot){
   let ci;
   if(manualCls>=0){ ci=manualCls; manualCls=-1; const s=document.getElementById('vehSel'); if(s) s.value='-1'; }
   else ci=recommendType();
-  let si=(plan && plan.nextSi!=null && SPRITES[plan.nextSi] && SPRITES[plan.nextSi].ci===ci) ? plan.nextSi : pickSprite(ci);
+  let si=(plan && plan.nextSi!=null && SPRITES[plan.nextSi] && SPRITES[plan.nextSi].ci===ci && spriteMatches(SPRITES[plan.nextSi])) ? plan.nextSi : pickSprite(ci);
   if(si<0) si=pickSprite(ci);
   if(si<0) return;
   // 严格避免「同一类别连续两次用同一个素材」：与上一次**实际摆放**比对，而不只是与预览记录比对
@@ -438,11 +517,11 @@ async function pickDir(){ if(!window.showDirectoryPicker){ alert('该浏览器�
 async function ensureRoot(){ if(saveRoot) return saveRoot; if(!window.showDirectoryPicker) return null; try{ saveRoot=await window.showDirectoryPicker({mode:'readwrite'}); setDirInfo(); return saveRoot; }catch(err){ return null; } }
 function exportJSON(){ if(!bg) return; const data={image:bg.name,width:bg.naturalWidth,height:bg.naturalHeight,boxes:placements.map(p=>({class:clsName(p),sprite:(SPRITES[p.si]||{}).n||'',cx:Math.round(p.x),cy:Math.round(p.y),rot:p.rot,size:p.size,bright:p.bright,contrast:p.contrast,blur:p.blur}))}; download(shareName()+'.json',new Blob([JSON.stringify(data,null,2)],{type:'application/json'})); }
 function validBlob(b){ return b && b.size>0; }
-/* 保存状态里的模式标记与混用提醒 */
+/* 保存状态里的光谱/模式标记与混用提醒 */
 function saveTag(pl){
-  const om=otherMode(mode); let n=0;
-  (pl||[]).forEach(p=>{ const s=spriteOf(p); if(s && s.mode===om) n++; });
-  return modeLabel(mode)+(n>0 ? ' · ⚠ 含 '+n+' 辆「'+modeLabel(om)+'」' : '');
+  let n=0;
+  (pl||[]).forEach(p=>{ if(isForeign(p)) n++; });
+  return spectrumLabel()+'·'+modeLabel(mode)+(n>0 ? ' · ⚠ 含 '+n+' 辆不属当前光谱/模式' : '');
 }
 async function saveCurrent(){
   if(!bg){ alert('先加载背景图'); return; }
@@ -498,6 +577,8 @@ function handleDrop(e){
 function init(){
   document.getElementById('folderInput').addEventListener('change',e=>{ if(e.target.files.length) loadImageFiles(e.target.files); });
   document.getElementById('modeSel').addEventListener('change',e=>switchMode(e.target.value));
+  document.getElementById('spectrumSel').addEventListener('change',e=>switchSpectrum(e.target.value));
+  document.getElementById('paletteSel').addEventListener('change',e=>switchSpectrum(spectrum, e.target.value));
   document.getElementById('cleanOther').addEventListener('click',cleanOtherMode);
   document.getElementById('vehSel').addEventListener('change',e=>{ const v=parseInt(e.target.value); if(v>=0) setManualCls(v); else { manualCls=-1; updatePlan(); updateInfo(); updateSizeLabel(); } });
   document.getElementById('fitBtn').addEventListener('click',fitZoom);
@@ -522,22 +603,21 @@ function init(){
   bindSlider('r_size','v_size','size',fmtN); bindSlider('r_bright','v_bright','bright',fmtN); bindSlider('r_contrast','v_contrast','contrast',fmtN); bindSlider('r_blur','v_blur','blur',fmtN); bindSlider('r_rot','v_rot','rot',fmtN);
   document.addEventListener('keydown',e=>{ if(e.key>='1'&&e.key<='4'){ const ids=modeClassIds(mode); if(ids[parseInt(e.key)-1]!=null) setManualCls(ids[parseInt(e.key)-1]); } else if(e.key==='z'){ if(placements.length) placements.pop(); redraw(); } else if(e.key==='c'||e.key==='C'){ placements=[]; redraw(); } else if(e.key==='s'||e.key==='S') saveCurrent(); else if(e.key==='ArrowLeft') goto(-1); else if(e.key==='ArrowRight') goto(1); else if(e.key==='Delete'||e.key==='Backspace'){ if(selected>=0){ e.preventDefault(); deleteSelected(); } } });
 }
-/* 模式下拉：按 MODES 生成（两套严格分开，默认基础四类） */
+/* 类别组下拉：按 MODES 生成，带当前光谱下的素材数 */
 function buildModeSelect(){
   const sel=document.getElementById('modeSel'); if(!sel) return;
   sel.innerHTML='';
   Object.keys(MODES).forEach(k=>{
     const o=document.createElement('option');
-    const n=(MODES[k] && typeof MODES[k].count==='number') ? MODES[k].count : modeSpriteCount(k);
-    o.value=k; o.textContent=modeLabel(k)+'（'+n+' 素材）';
+    o.value=k; o.textContent=modeLabel(k)+'（'+modeSpriteCount(spectrum,k,palFilter)+' 素材）';
     sel.appendChild(o);
   });
   sel.value=mode;
 }
 init();
 initVehicles().then(()=>{
-  buildVehSelect(); buildModeSelect();
-  setStatus('素材已加载：'+modeLabel(mode)+' '+modeSpriteCount(mode)+' 个素材 · 类别 '+modeClasses(mode).join(' / ')+
-            '。打开一个背景图文件夹：点空白=放车（自动按类别挑车型/视角，1-4 可指定类别）；顶部「模式」可切到类增量新四类。');
+  buildSpectrumSelect(); buildPaletteSelect(); buildVehSelect(); buildModeSelect();
+  setStatus('素材已加载：'+spectrumLabel()+' · '+modeLabel(mode)+' '+modeSpriteCount(spectrum,mode,palFilter)+' 个素材 · 类别 '+modeClasses(mode).join(' / ')+
+            '。打开一个背景图文件夹：点空白=放车（自动按类别挑车型/视角，1-4 可指定类别）；顶部可切「光谱（红外/可见光）」「配色」「类别组」。');
   updateStats(); updateMixInfo();
 });

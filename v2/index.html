@@ -81,14 +81,16 @@
   <div class="brand"><span class="logo">▦</span>红外车辆拼贴工具 v2</div>
   <div class="toolbar">
     <label class="lblbtn"><button>打开文件夹</button><input type="file" id="folderInput" webkitdirectory multiple></label>
-    <select id="modeSel" title="模式：两套素材库与类别表严格分开，建议分别用不同的输出目录"></select>
+    <select id="spectrumSel" title="光谱：红外（灰度素材）/ 可见光（彩色素材）——两套数据请分别保存到不同目录"></select>
+    <select id="paletteSel" title="可见光配色筛选（仅可见光模式可选）"></select>
+    <select id="modeSel" title="类别组：基础四类 / 类增量新四类（两套严格分开）"></select>
     <select id="vehSel" title="类别（下一辆生效，之后回自动）">
       <option value="-1">自动（推荐）</option>
     </select>
     <button id="fitBtn">适应窗口</button>
     <button id="clear">清空当前框</button>
     <label class="chk"><input type="checkbox" id="hideLabels">隐藏所有标签</label>
-    <span class="hint">点空白放车 · 可拖整个文件夹进来</span>
+    <span class="hint">点空白放车 · 红外/可见光素材按光谱加载 · 可拖整个文件夹进来</span>
   </div>
   <div class="dot"></div>
 </header>
@@ -98,7 +100,7 @@
     <button class="sidearrow left" id="prev">◀</button>
     <div id="canvasWrap"><canvas id="cv"></canvas></div>
     <button class="sidearrow right" id="next">▶</button>
-    <div id="stem">v2：点空白=放车（按当前模式的类别自动挑车型/视角，1-4 或下拉框可指定类别）；点已有车=选中/拖动；拖空白或右键=平移；滚轮=缩放；←/→ 切图。顶部「模式」切换两套互不相干的素材库与类别表。</div>
+    <div id="stem">v2：点空白=放车（按当前「光谱 · 类别组」自动挑车型/视角，1-4 或下拉框可指定类别）；点已有车=选中/拖动；拖空白或右键=平移；滚轮=缩放；←/→ 切图。顶部可切「光谱（红外/可见光）」「配色」「类别组」。</div>
   </div>
 
   <aside id="side">
@@ -116,9 +118,9 @@
       <h3><span class="ic">📋</span> 标注计划（随机提示）</h3>
       <div id="planInfo" class="note" style="color:#cfe3f5;">—</div>
       <button id="replan" style="width:100%;margin-top:6px;">换一组计划</button>
-      <div class="note">车型/视角从该模式的素材里自动挑选，面板会显示下一个将使用的素材。</div>
+      <div class="note">车型/视角从当前「光谱 · 类别组」的素材里自动挑选，面板会显示下一个将使用的素材。</div>
       <div class="note" id="mixInfo" style="display:none;color:#ffd07a;"></div>
-      <button id="cleanOther" style="width:100%;margin-top:6px;display:none;">删除本图不属于当前模式的车</button>
+      <button id="cleanOther" style="width:100%;margin-top:6px;display:none;">删除本图不属于当前光谱/模式的车</button>
     </div>
 
     <div class="sec">
@@ -157,18 +159,20 @@
     </div>
 
     <div class="sec">
-      <div class="note">v2 变更：① 素材库换成透明渲染车，并分成「基础四类」「类增量新四类」两个模式；② 类别表按官方口径
-      <b>0 car1 装甲车 / 1 car2 卡车 / 2 car3 轿车 / 3 car4 皮卡 / 4 radar_vehicle 雷达车 / 5 military_fuel_tanker 军用油罐车 /
-      6 bridge_layer 轮式架桥车 / 7 military_motorcycle 军用越野摩托车</b>（旧版把 car2/car4 的中文名写反了）；③ 标注框按车辆实体范围计算。
+      <div class="note">v2 变更：① 素材含<b>红外（灰度）与可见光（彩色，沙漠迷彩/军绿两套配色）</b>，按「光谱 + 类别组」分组、按需加载；
+      ② 类别表按官方口径 <b>0 car1 装甲车 / 1 car2 卡车 / 2 car3 轿车 / 3 car4 皮卡 / 4 radar_vehicle 雷达车 / 5 military_fuel_tanker 军用油罐车 /
+      6 bridge_layer 轮式架桥车 / 7 military_motorcycle 军用越野摩托车</b>（旧版把 car2/car4 的中文名写反了）；③ 标注框按车辆实体范围计算；
+      ④ 融合按通道对齐背景统计——红外出灰度、可见光保色。
       旧版仍在 <a href="../" style="color:#7fd0ff;">上层目录</a>。</div>
     </div>
 
     <div class="sec">
-      <h3><span class="ic">🧩</span> 模式（两套分开）</h3>
+      <h3><span class="ic">🧩</span> 光谱与类别组（各套分开）</h3>
       <div class="note" style="color:#cfe3f5;">
-        <b>基础四类</b>：car1 装甲车 / car2 卡车 / car3 轿车 / car4 皮卡（66 个素材）<br>
-        <b>类增量（新四类）</b>：radar_vehicle 雷达车 / military_fuel_tanker 军用油罐车 / bridge_layer 轮式架桥车 / military_motorcycle 军用越野摩托车（24 个素材）<br>
-        类别 ID 为官方口径：旧类 0~3 不变，新类从 <b>4</b> 起追加。两套互斥，<b>建议各自用不同的输出目录</b>；同一张图里混用会在「标注计划」里给出警告。
+        <b>光谱</b>：红外（灰度素材）／可见光（彩色素材，两套配色）——<b>建议各自用不同的输出目录</b><br>
+        <b>类别组</b>：基础四类 car1 装甲车 / car2 卡车 / car3 轿车 / car4 皮卡；类增量新四类 radar_vehicle 雷达车 / military_fuel_tanker 军用油罐车 / bridge_layer 轮式架桥车 / military_motorcycle 军用越野摩托车<br>
+        类别 ID 为官方口径：旧类 0~3 不变，新类从 <b>4</b> 起追加。同一建模的两套配色、两套光谱共享 family，划分数据集时不要拆开。<br>
+        同一张图里混了不同光谱/类别组的数据会在「标注计划」里给出警告。
       </div>
     </div>
 
@@ -179,7 +183,8 @@
   </aside>
 </div>
 <script src="classes.js"></script>
-<script src="sprites_base.js"></script>
-<script src="app.js?v=2"></script>
+<script src="sprite_groups.js"></script>
+<script src="sprites_ir_base.js"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>
